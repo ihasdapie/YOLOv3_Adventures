@@ -8,8 +8,6 @@ from torch.autograd import Variable
 import numpy as np
 import cv2 
 
-
-
 def predictTransform(prediction, inp_dim, anchors, num_classes, CUDA = True):
     # takes detection feature map and creates list of bounding boxes
 
@@ -62,15 +60,105 @@ def predictTransform(prediction, inp_dim, anchors, num_classes, CUDA = True):
 
     return prediction
 
+def writeResults(prediction, confidence, num_classes, nms_conf_thres = 0.4):
+    # create & apply mask over prediction: set bounding boxes w/ objectness < conf threshold to 0
+    conf_mask = (prediction[:,:,4] > confidence).float().unsqueeze(2)
+    prediction = prediction*conf_mask
+    
+    # calculate IoU
+
+    # transform bounding box from center(x,y), w, h to top_left, top_right, bottom_left, bottom_right
+    box_corner = prediction.new(prediction.shape)
+    box_corner[:,:,0] = (prediction[:,:,0] - prediction[:,:,2]/2)
+    box_corner[:,:,1] = (prediction[:,:,1] - prediction[:,:,3]/2)
+    box_corner[:,:,2] = (prediction[:,:,0] + prediction[:,:,2]/2) 
+    box_corner[:,:,3] = (prediction[:,:,1] + prediction[:,:,3]/2)
+    prediction[:,:,:4] = box_corner[:,:,:4]
+
+    batch_size = prediction.size(0)
+
+    write=False
+
+    for ind in range(batch_size):
+        image_pred = prediction[ind]
+
+        max_conf, max_conf_score = torch.max(image_pred[:, 5:5+num_classes], 1)
+        max_conf = max_conf.float().unsqueeze(1)
+        seq = (image_pred[:,:5], max_conf, max_conf_score)
+        image_pred = torch.cat(seq, 1)
+
+        non_zero_ind = (torch.nonzero(image_pred[:,4]))
+
+        try:
+            image_pred = image_pred[non_zero_ind.squeeze(),:].view(-1,7)
+        except:
+            continue
+
+        if image_pred.shape[0] == 0:
+            continue
+        img_classes = unique(image_pred)
+
+        img_classes = unique(image_pred[:, -1])
+
+        for cls in img_classes:
+            # get detections for each class (cls) 
+            cls_mask = image_pred*(image_pred[:,-1]==cls).float().unsqueeze(1)
+            class_mask_ind = torch.nonzero(cls_mask[:,-2]).squeeze()
+            image_pred_class = image_pred[class_mask_ind].view(-1,7)
+
+            n_detections = image_pred_class.size(0)
+            for i in range(n_detections):
+                try:
+                    ious = IoU(image_pred_class[i].unsqueeze(0), image_pred_class[i+1:])
+                except (ValueError, IndexError):
+                    break
+
+                iou_mask = (ious<nms_conf_thres).float().unsqueeze(1)
+                image_pred_class[i_1:] *= iou_mask
+
+                non_zero_ind = torch.nonzero(image_pred_class[:,4].squeeze())
+                image_pred_class = image_pred_class[non_zero_ind].view(-1,7)
+
+            batch_ind = image_pred_class.new(image_pred_class.size(0), 1).fill_(ind)
+            seq = batch_ind, image_pred_class
+
+            if not write:
+                output = torch.cat(seq, 1)
+                write = True
+
+            else:
+                out = torch.cat(seq, 1)
+                output = torch.cat((output, out))
+
+    try:
+        return output
+
+    except:
+        return 0
 
 
 
 
+def IoU(b1, b2):
+    ir_x1 = torch.max(b1[:,0], b2[:,0])
+    ir_y1 = torch.max(b1[:,1], b2[:,1])
+    ir_x2 = torch.max(b1[:,2], b2[:,2])
+    ir_y2 = torch.max(b1[:,3], b2[:,3])
+
+    intersection = torch.clamp(ir_x2 - ir_x1 + 1, min=0) * torch.clamp(ir_y2-ir_y1+1, min=0)
+
+    u1 = (b1[:,2]-b1[:,0]+1)*(b1[:,3]-b1[:,1]+1)    
+    u2 = (b2[:,2]-b2[:,0]+1)*(b2[:,3]-b2[:,1]+1)    
+
+    return (intersection/(u1+u2-intersection))
 
 
+def unique(tensor):
+    t = tensor.cpu().numpy()
+    t= np.unique(np_tensor)
+    t = torch.from_numpy(t)
 
-
-
-
-
+    res = tensor.new(t.shape)
+    res.copy_(t)
+    return res
 
