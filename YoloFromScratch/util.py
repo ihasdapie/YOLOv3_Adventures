@@ -60,7 +60,7 @@ def predictTransform(prediction, inp_dim, anchors, num_classes, CUDA = True):
 
     return prediction
 
-def writeResults(prediction, confidence, num_classes, nms_conf_thres = 0.4):
+def writeResults(prediction, confidence, num_classes, nms_conf = 0.4):
     # create & apply mask over prediction: set bounding boxes w/ objectness < conf threshold to 0
     conf_mask = (prediction[:,:,4] > confidence).float().unsqueeze(2)
     prediction = prediction*conf_mask
@@ -81,13 +81,14 @@ def writeResults(prediction, confidence, num_classes, nms_conf_thres = 0.4):
 
     for ind in range(batch_size):
         image_pred = prediction[ind]
-
         max_conf, max_conf_score = torch.max(image_pred[:, 5:5+num_classes], 1)
         max_conf = max_conf.float().unsqueeze(1)
+        max_conf_score = max_conf_score.float().unsqueeze(1)
         seq = (image_pred[:,:5], max_conf, max_conf_score)
+
         image_pred = torch.cat(seq, 1)
 
-        non_zero_ind = (torch.nonzero(image_pred[:,4]))
+        non_zero_ind = torch.nonzero(image_pred[:,4], as_tuple=False).squeeze()
 
         try:
             image_pred = image_pred[non_zero_ind.squeeze(),:].view(-1,7)
@@ -103,7 +104,7 @@ def writeResults(prediction, confidence, num_classes, nms_conf_thres = 0.4):
         for cls in img_classes:
             # get detections for each class (cls) 
             cls_mask = image_pred*(image_pred[:,-1]==cls).float().unsqueeze(1)
-            class_mask_ind = torch.nonzero(cls_mask[:,-2]).squeeze()
+            class_mask_ind = torch.nonzero(cls_mask[:,-2], as_tuple=False).squeeze()
             image_pred_class = image_pred[class_mask_ind].view(-1,7)
 
             n_detections = image_pred_class.size(0)
@@ -113,10 +114,11 @@ def writeResults(prediction, confidence, num_classes, nms_conf_thres = 0.4):
                 except (ValueError, IndexError):
                     break
 
-                iou_mask = (ious<nms_conf_thres).float().unsqueeze(1)
-                image_pred_class[i_1:] *= iou_mask
+                iou_mask = (ious<nms_conf).float().unsqueeze(1)
+                image_pred_class[i+1:] *= iou_mask
 
-                non_zero_ind = torch.nonzero(image_pred_class[:,4].squeeze())
+
+                non_zero_ind = torch.nonzero(image_pred_class[:,4].squeeze(), as_tuple=False)
                 image_pred_class = image_pred_class[non_zero_ind].view(-1,7)
 
             batch_ind = image_pred_class.new(image_pred_class.size(0), 1).fill_(ind)
@@ -155,7 +157,7 @@ def IoU(b1, b2):
 
 def unique(tensor):
     t = tensor.cpu().numpy()
-    t= np.unique(np_tensor)
+    t= np.unique(t)
     t = torch.from_numpy(t)
 
     res = tensor.new(t.shape)

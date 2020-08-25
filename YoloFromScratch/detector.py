@@ -14,10 +14,6 @@ import pickle as pkl
 import pandas as pd
 import random
 
-
-
-
-
 def arg_parse():
     """
     Parse arguements to the detect module
@@ -47,10 +43,6 @@ def arg_parse():
     
     return parser.parse_args()
 
-
-def load_classes(nf):
-    return(open(nf, 'r').read().split('\n')[:-1])
-
 def resizeImage(img, dims):
     img_w, img_h = img.shape[1], img.shape[0]
     w, h = dims
@@ -64,7 +56,7 @@ def resizeImage(img, dims):
 
     return out
 
-def prep_img(img, dims):
+def prepImage(img, dims):
     img = cv2.resize(img, (dims, dims))
     img = img[:,:,::-1].transpose((2,0,1)).copy()
     img = torch.from_numpy(img).float().div(255.0).unsqueeze(0)
@@ -72,15 +64,32 @@ def prep_img(img, dims):
     return img
 
 
+def writeImage(x, results):
+    c1 = tuple(x[1:3].int())
+    c2 = tuple(x[3:5].int())
+    img = results[int(x[0])]
+    cls = int(x[-1])
+    color = random.choice(colors)
+    label = "{0}".format(classes[cls])
+    cv2.rectangle(img, c1, c2,color, 1)
+    t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1 , 1)[0]
+    c2 = c1[0] + t_size[0] + 3, c1[1] + t_size[1] + 4
+    cv2.rectangle(img, c1, c2,color, -1)
+    cv2.putText(img, label, (c1[0], c1[1] + t_size[1] + 4), cv2.FONT_HERSHEY_PLAIN, 1, [225,255,255], 1);
+    return img
 
+def load_classes(nf):
+    return(open(nf, 'r').read().split('\n')[:-1])
 
 args = arg_parse()
 images = args.images
 batch_size = int(args.bs)
 confidence = float(args.confidence)
-nms_thesh = float(args.nms_thresh)
+nms_thresh = float(args.nms_thresh)
 start = 0
 CUDA = torch.cuda.is_available()
+
+
 classes = load_classes("data/coco.names")
 num_classes = len(classes)
 
@@ -97,9 +106,6 @@ if CUDA:
 
 model.eval()
 
-
-
-
 try:
     imlist = [osp.join(osp.realpath('.'), images, img) for img in os.listdir(images)]
 except NotADirectoryError:
@@ -114,10 +120,9 @@ if not os.path.exists(args.det):
 
 imgs = [cv2.imread(x) for x in imlist]
 
+im_batches = list(map(prepImage, imgs, [int(args.reso) for x in range(len(imlist))]))
 
-im_batches = list(map(prep_image, imgs, [dim for x in range(len(imlist))]))
-
-im_dim_list = [x(x.shape[1], x.shape[0]) for x in imgs]
+im_dim_list = [(x.shape[1], x.shape[0]) for x in imgs]
 im_dim_list = torch.FloatTensor(im_dim_list).repeat(1,2)
 
 if CUDA:
@@ -138,8 +143,9 @@ write = 0
 
 for i, batch in enumerate(im_batches):
     if CUDA:
-        batch = batch.CUDA()
-    pred = model(Variable(batch, volatile=True), CUDA)
+        batch = batch.cuda()
+    with torch.no_grad():
+        prediction = model(Variable(batch), CUDA)
     prediction = writeResults(prediction, confidence, num_classes, nms_conf=nms_thresh)
 
     if type(prediction) == int:
@@ -147,7 +153,7 @@ for i, batch in enumerate(im_batches):
             im_id = i*batch_size+j
         continue
 
-    prediction[:,0] += 8*batch_size
+    prediction[:,0] += i*batch_size
     
     if not write:
         output = prediction
@@ -175,8 +181,8 @@ im_dim_list = torch.index_select(im_dim_list, 0, output[:,0].long())
 scaling_factor = torch.min(416/im_dim_list,1)[0].view(-1,1)
 
 
-output[:,[1,3]] -= (inp_dim - scaling_factor*im_dim_list[:,0].view(-1,1))/2
-output[:,[2,4]] -= (inp_dim - scaling_factor*im_dim_list[:,1].view(-1,1))/2
+output[:,[1,3]] -= (int(args.reso) - scaling_factor*im_dim_list[:,0].view(-1,1))/2
+output[:,[2,4]] -= (int(args.reso) - scaling_factor*im_dim_list[:,1].view(-1,1))/2
 
 
 
@@ -191,32 +197,13 @@ output_recast = time.time()
 class_load = time.time()
 colors = pkl.load(open("pallete", "rb"))
 
-draw = time.time()
-
-
-def write(x, results):
-    c1 = tuple(x[1:3].int())
-    c2 = tuple(x[3:5].int())
-    img = results[int(x[0])]
-    cls = int(x[-1])
-    color = random.choice(colors)
-    label = "{0}".format(classes[cls])
-    cv2.rectangle(img, c1, c2,color, 1)
-    t_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_PLAIN, 1 , 1)[0]
-    c2 = c1[0] + t_size[0] + 3, c1[1] + t_size[1] + 4
-    cv2.rectangle(img, c1, c2,color, -1)
-    cv2.putText(img, label, (c1[0], c1[1] + t_size[1] + 4), cv2.FONT_HERSHEY_PLAIN, 1, [225,255,255], 1);
-    return img
-
-
-list(map(lambda x: write(x, loaded_ims), output))
+list(map(lambda x: writeImage(x, imgs), output))
 
 det_names = pd.Series(imlist).apply(lambda x: "{}/det_{}".format(args.det,x.split("/")[-1]))
 
-list(map(cv2.imwrite, det_names, loaded_ims))
+list(map(cv2.imwrite, det_names, imgs))
 
 torch.cuda.empty_cache()
     
 
 
-            
